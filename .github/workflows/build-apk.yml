@@ -1,0 +1,114 @@
+name: Test Build
+
+on:
+#  push:
+#    branches:
+#      - main
+#  pull_request:
+  workflow_dispatch:
+    inputs:
+      # 1. CPU 架构选择
+      abi:
+        description: 'CPU 架构 (ABI)'
+        required: true
+        default: 'all'
+        type: choice
+        options: [ 'armeabi', 'arm64', 'all' ]
+
+      # 2. 品牌版本选择
+      brand:
+        description: '品牌版本'
+        required: true
+        default: 'all'
+        type: choice
+        options: [ 'generic', 'hisense', 'all' ]
+
+      # 3. 运行模式选择
+      mode:
+        description: '运行模式'
+        required: true
+        default: 'all'
+        type: choice
+        options: [ 'normal', 'python', 'all' ]
+
+      # 4. 发布版本标记
+      release_tag:
+        description: 'Release 版本号 (例如 v1.0.0)'
+        required: true
+        default: 'v1.0.0'
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      # 固定使用你要求的 JDK 8 + Gradle 7.5 环境
+      - name: Set up JDK 8
+        uses: actions/setup-java@v4
+        with:
+          java-version: '8'
+          distribution: 'temurin'
+          cache: gradle
+      - name: Build With Gradle
+        run: chmod +x gradlew
+
+      # ==============================================
+      # 核心：根据选择自动拼接编译命令
+      # ==============================================
+      - name: 编译所选版本 APK
+        run: |
+          # 遍历选择的架构
+          abis="${{ github.event.inputs.abi }}"
+          [ "$abis" = "all" ] && abis="armeabi arm64"
+          
+          # 遍历选择的品牌
+          brands="${{ github.event.inputs.brand }}"
+          [ "$brands" = "all" ] && brands="generic hisense"
+          
+          # 遍历选择的模式
+          modes="${{ github.event.inputs.mode }}"
+          [ "$modes" = "all" ] && modes="normal python"
+          
+          # 自动生成所有组合的编译命令
+          for abi in $abis; do
+            for brand in $brands; do
+              for mode in $modes; do
+                ./gradlew assemble${abi^}${brand^}${mode^}Debug
+              done
+            done
+          done
+
+      # ==============================================
+      # 上传所有编译好的 APK（自动匹配所有路径）
+      # ==============================================
+      - name: Prepare App
+        run: |
+          mkdir -p ${{ github.workspace }}/apk/
+          for file in `find ~ -name "*.apk" -print`; do
+            mv "$file" ${{ github.workspace }}/apk/
+          done
+      - name: Upload App To Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: com.github.tvbox.osc
+          path: ${{ github.workspace }}/apk/*
+
+      # ==============================================
+      # 创建 GitHub Release 并上传所有 APK
+      # ==============================================
+      - name: 创建 GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event.inputs.release_tag }}
+          name: 编译发布 ${{ github.event.inputs.release_tag }}
+          body: |
+            自动编译发布
+            支持架构：${{ github.event.inputs.abi }}
+            支持版本：${{ github.event.inputs.brand }}
+            运行模式：${{ github.event.inputs.mode }}
+          files: app/build/outputs/apk/**/*.apk
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
